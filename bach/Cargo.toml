@@ -11,7 +11,7 @@ arr_macro = "0.1"
 async-task = { version = "4", default-features = false }
 flume = "0.9"
 futures = { version = "0.3", default-features = false }
-intrusive-collections = { version = "0.9", default-features = false }
+intrusive-collections = "0.9"
 
 [dev-dependencies]
 bolero = "0.6"
