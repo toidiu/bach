@@ -1,0 +1,17 @@
+[package]
+name = "bach"
+version = "0.0.1"
+authors = ["Cameron Bytheway <bytheway.cameron@gmail.com>"]
+description = "Discrete-event simulation environment for async workflows"
+license = "MIT"
+edition = "2018"
+
+[dependencies]
+arr_macro = "0.1"
+async-task = "4"
+flume = "0.9"
+futures = "0.3"
+intrusive-collections = "0.9"
+
+[dev-dependencies]
+bolero = "0.6"

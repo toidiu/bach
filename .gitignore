@@ -1,0 +1,7 @@
+build
+corpus/
+crashes/
+target
+**/*.rs.bk
+Cargo.lock
+*.tar.gz
