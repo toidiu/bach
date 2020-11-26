@@ -48,7 +48,7 @@ impl Wheel {
         self.insert_at(entry, ticks);
     }
 
-    fn insert_at(&mut self, entry: ArcEntry, start_tick: u64) -> Option<u64> {
+    fn insert_at(&mut self, entry: ArcEntry, start_tick: u64) -> bool {
         let delay = entry.delay();
         let absolute_time = delay.wrapping_add(start_tick);
         let now = self.ticks();
@@ -56,7 +56,7 @@ impl Wheel {
 
         if zero_time == 0 {
             self.pending_wake.push_back(entry);
-            return Some(delay);
+            return true;
         }
 
         let absolute_bytes = absolute_time.to_le_bytes();
@@ -67,7 +67,7 @@ impl Wheel {
 
         self.stack_mut(index).insert(position, entry);
 
-        None
+        false
     }
 
     pub fn advance(&mut self) -> Option<u64> {
@@ -82,18 +82,17 @@ impl Wheel {
             return None;
         }
 
-        loop {
-            let elapsed = self.advance_once(start)?;
-            if elapsed != u64::MAX {
-                return Some(self.ticks() - start);
-            }
-        }
+        while !self.advance_once()? {}
+
+        // TODO handle wheel wrapping
+
+        Some(self.ticks() - start)
     }
 
-    fn advance_once(&mut self, start: u64) -> Option<u64> {
+    fn advance_once(&mut self) -> Option<bool> {
         let mut can_skip = true;
         let mut is_empty = true;
-        let mut min_elapsed = u64::MAX;
+        let mut has_pending = false;
 
         for index in 0..self.stacks.len() {
             let stack = self.stack_mut(index);
@@ -106,20 +105,22 @@ impl Wheel {
 
             for entry in list {
                 let start_tick = entry.start_tick();
-                if let Some(delay) = self.insert_at(entry, start_tick) {
-                    let elapsed = if let Some(elapsed) = delay.checked_sub(start - start_tick) {
-                        elapsed
-                    } else {
-                        start_tick + delay
-                    };
-                    min_elapsed = min_elapsed.min(elapsed);
+                if self.insert_at(entry, start_tick) {
+                    // A pending item is ready
+                    has_pending = true;
+                } else {
+                    // the item was pushed above the current stack so
+                    // we can't skip anymore
+                    can_skip = false;
                 }
+
+                // in either case we know there's some available entry
                 is_empty = false;
             }
 
-            // we need to start at the top again
-            if next != 0 || min_elapsed != u64::MAX {
-                return Some(min_elapsed);
+            // was can only proceed to the next stack if the current wrapped
+            if next != 0 {
+                return Some(has_pending);
             }
         }
 
@@ -127,7 +128,7 @@ impl Wheel {
             return None;
         }
 
-        Some(min_elapsed)
+        Some(has_pending)
     }
 
     pub fn wake(&mut self) -> usize {
@@ -201,7 +202,6 @@ mod tests {
             let mut elapsed = 0;
 
             while let Some(expected) = sorted.next() {
-                std::dbg!(&wheel);
                 let delta = expected - elapsed;
                 assert_eq!(wheel.advance(), Some(delta));
                 elapsed += delta;

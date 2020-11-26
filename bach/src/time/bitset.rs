@@ -1,24 +1,26 @@
+use core::mem::size_of;
+
+type Slot = u64;
+const SLOT_BITS: usize = size_of::<Slot>() * 8;
+const SLOT_BITS_U8: u8 = SLOT_BITS as u8;
+const SLOT_COUNT: usize = 256 / SLOT_BITS;
+
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Bitset([u64; 4]);
+pub struct Bitset([Slot; SLOT_COUNT]);
 
 impl Bitset {
-    pub const fn is_empty(&self) -> bool {
-        let counts = self.0;
-        (counts[0] | counts[1] | counts[2] | counts[3]) == 0
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().copied().fold(0, |acc, slot| acc | slot) == 0
     }
 
-    pub const fn len(&self) -> u8 {
-        let counts = self.0;
-        (counts[0].count_ones()
-            + counts[1].count_ones()
-            + counts[2].count_ones()
-            + counts[3].count_ones()) as u8
+    pub fn len(&self) -> u8 {
+        self.0.iter().map(|slot| slot.count_ones() as u8).sum()
     }
 
     #[allow(dead_code)]
     pub fn get(&self, index: u8) -> bool {
-        let slot = index / 64;
-        let shift = index % 64;
+        let slot = index / SLOT_BITS_U8;
+        let shift = index % SLOT_BITS_U8;
         let flag = 1 << shift;
         self.slot(slot) & flag != 0
     }
@@ -32,8 +34,8 @@ impl Bitset {
     }
 
     pub fn update(&mut self, index: u8, enabled: bool) {
-        let slot = index / 64;
-        let shift = index % 64;
+        let slot = index / SLOT_BITS_U8;
+        let shift = index % SLOT_BITS_U8;
         let flag = 1 << shift;
         let slot = self.slot_mut(slot);
         if enabled {
@@ -44,34 +46,34 @@ impl Bitset {
     }
 
     pub fn next_occupied(&self, mut index: u8) -> Option<u8> {
-        let mut slot_index = index / 64;
-        let mut shift = index % 64;
+        let mut slot_index = index / SLOT_BITS_U8;
+        let mut shift = index % SLOT_BITS_U8;
 
         loop {
             let slot = self.slot(slot_index);
 
             let trailing = (slot >> shift).trailing_zeros() as u8;
 
-            if trailing != 64 {
+            if trailing != SLOT_BITS_U8 {
                 return Some(index + trailing);
             }
 
-            index = index.checked_add(64 - shift)?;
+            index = index.checked_add(SLOT_BITS_U8 - shift)?;
             slot_index += 1;
             shift = 0;
         }
     }
 
-    fn slot(&self, index: u8) -> &u64 {
+    fn slot(&self, index: u8) -> &Slot {
         if cfg!(test) {
-            debug_assert!(index < 4);
+            debug_assert!(index < (SLOT_COUNT as u8));
         }
         unsafe { self.0.get_unchecked(index as usize) }
     }
 
-    fn slot_mut(&mut self, index: u8) -> &mut u64 {
+    fn slot_mut(&mut self, index: u8) -> &mut Slot {
         if cfg!(test) {
-            debug_assert!(index < 4);
+            debug_assert!(index < (SLOT_COUNT as u8));
         }
         unsafe { self.0.get_unchecked_mut(index as usize) }
     }

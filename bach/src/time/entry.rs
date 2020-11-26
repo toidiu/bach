@@ -16,6 +16,7 @@ pub type ArcEntry = Arc<Entry>;
 pub struct Entry {
     waker: AtomicWaker,
     expired: AtomicBool,
+    registered: AtomicBool,
     delay: u64,
     periodic: bool,
     start_tick: AtomicU64,
@@ -30,6 +31,7 @@ impl Entry {
         Arc::new(Entry {
             waker: AtomicWaker::new(),
             expired: AtomicBool::new(false),
+            registered: AtomicBool::new(false),
             delay,
             periodic,
             start_tick: AtomicU64::new(0),
@@ -57,6 +59,8 @@ impl Entry {
             return true;
         }
 
+        self.registered.store(false, Ordering::SeqCst);
+
         if let Some(waker) = self.waker.take() {
             waker.wake();
         }
@@ -64,8 +68,8 @@ impl Entry {
         false
     }
 
-    pub fn is_registered(&self) -> bool {
-        self.link.is_linked()
+    pub fn should_register(&self) -> bool {
+        !self.registered.swap(true, Ordering::SeqCst)
     }
 
     pub fn cancel(&self) {

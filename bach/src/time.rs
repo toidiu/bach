@@ -189,7 +189,7 @@ impl Future for Timer {
         }
 
         // register the timer with the handle
-        if !self.entry.is_registered() {
+        if self.entry.should_register() {
             self.handle.register(&self.entry);
         }
 
