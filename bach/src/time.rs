@@ -262,7 +262,6 @@ mod tests {
     }
 
     fn test_helper(delays: &[(u8, Duration)], min_time: Duration) {
-        std::eprintln!();
         let mut scheduler = Scheduler::new(None, min_time);
         let mut executor = executor();
 

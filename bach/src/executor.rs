@@ -102,8 +102,9 @@ pub trait Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::rc::Rc;
     use core::cell::Cell;
-    use std::{eprint, rc::Rc};
+    use std::eprint;
 
     fn executor() -> Executor<Env> {
         Executor::new(Env::default(), None)

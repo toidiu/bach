@@ -8,10 +8,10 @@ edition = "2018"
 
 [dependencies]
 arr_macro = "0.1"
-async-task = "4"
+async-task = { version = "4", default-features = false }
 flume = "0.9"
-futures = "0.3"
-intrusive-collections = "0.9"
+futures = { version = "0.3", default-features = false }
+intrusive-collections = { version = "0.9", default-features = false }
 
 [dev-dependencies]
 bolero = "0.6"

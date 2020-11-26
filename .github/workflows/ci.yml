@@ -148,11 +148,6 @@ jobs:
         with:
           lfs: true
 
-      - name: Restore fuzz corpus
-        shell: bash
-        run: |
-          find . -name 'corpus.tar.gz' -exec dirname {} ';' | xargs -L 1 bash -c 'cd "$0" && rm -rf corpus && tar xf corpus.tar.gz'
-
       - name: Install sccache
         uses: actions-rs/install@v0.1
         with:
@@ -242,64 +237,6 @@ jobs:
           RUSTC_WRAPPER: sccache
           # needed to read corpus files from filesystem
           MIRIFLAGS: -Zmiri-disable-isolation
-
-      - name: Stop sccache
-        run: sccache --stop-server
-
-  no_std:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        crate: [bach]
-    steps:
-      - uses: actions-rs/toolchain@v1
-        id: toolchain
-        with:
-          toolchain: ${{ env.RUST_NIGHTLY_TOOLCHAIN }}
-          override: true
-          target: thumbv7m-none-eabi
-
-      - uses: actions/checkout@v2
-
-      - name: Install sccache
-        uses: actions-rs/install@v0.1
-        with:
-          crate: sccache
-          use-tool-cache: true
-          version: latest
-
-      - name: Generate Cargo.lock
-        run: cargo update
-
-      - name: Cache cargo registry
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ~/.cargo/registry/cache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-cargo-registry-
-
-      - name: Cache sccache output
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-sccache-${{ hashFiles('**/Cargo.*') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-sccache-
-
-      - name: Start sccache
-        run: sccache --start-server
-
-      # see https://github.com/rust-lang/cargo/issues/7916
-      - name: Run cargo build
-        run: |
-          cd ${{ matrix.crate }} && \
-            cargo build \
-              -Z features=dev_dep \
-              --no-default-features \
-              --target thumbv7m-none-eabi
-        env:
-          RUSTC_WRAPPER: sccache
 
       - name: Stop sccache
         run: sccache --stop-server
