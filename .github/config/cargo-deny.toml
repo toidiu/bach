@@ -1,0 +1,34 @@
+[advisories]
+vulnerability = "deny"
+unmaintained = "deny"
+notice = "deny"
+yanked = "deny"
+ignore = [
+    "RUSTSEC-2020-0056",
+]
+
+[bans]
+multiple-versions = "deny"
+skip = [
+    { name = "cfg-if" }, # only a macro so not a big deal
+    { name = "getrandom" }, # currently only a test dependency
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses]
+unlicensed = "deny"
+allow-osi-fsf-free = "neither"
+copyleft = "deny"
+confidence-threshold = 0.90
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "OpenSSL",
+    "Zlib",
+]
