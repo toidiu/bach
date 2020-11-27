@@ -94,11 +94,7 @@ impl<E: Entry> Wheel<E> {
         let mut iterations = 0;
 
         while !self.advance_once()? {
-            if iterations == u16::MAX {
-                assert!(self.is_empty());
-                break;
-            }
-            //            debug_assert!(iterations < 1500, "advance iterated too many times");
+            debug_assert!(iterations < u16::MAX, "advance iterated too many times");
             iterations += 1;
         }
 
@@ -147,7 +143,7 @@ impl<E: Entry> Wheel<E> {
         Some(has_pending)
     }
 
-    pub fn wake<F: Fn(E)>(&mut self, wake: F) -> usize {
+    pub fn wake<F: FnMut(E)>(&mut self, mut wake: F) -> usize {
         let mut count = 0;
 
         let mut pending = self.pending_wake.take();
