@@ -1,23 +1,24 @@
 use super::{
     bitset::Bitset,
-    entry::{Adapter, ArcEntry, List},
+    entry::{Entry, Queue},
 };
 use arr_macro::arr;
-use core::fmt;
+use core::{fmt, marker::PhantomData};
 
-pub struct Stack {
-    slots: [List; 256],
+pub struct Stack<E: Entry> {
+    slots: [E::Queue; 256],
     occupied: Bitset,
     current: u8,
+    entry: PhantomData<E>,
 }
 
-impl Default for Stack {
+impl<E: Entry> Default for Stack<E> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl fmt::Debug for Stack {
+impl<E: Entry> fmt::Debug for Stack<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Stack")
             .field("occupied", &self.occupied.len())
@@ -26,17 +27,18 @@ impl fmt::Debug for Stack {
     }
 }
 
-impl Stack {
+impl<E: Entry> Stack<E> {
     pub fn new() -> Self {
-        let slots = arr![List::new(Adapter::new()); 256];
+        let slots = arr![E::Queue::new(); 256];
         Self {
             slots,
             occupied: Default::default(),
             current: 0,
+            entry: PhantomData,
         }
     }
 
-    pub const fn current(&self) -> u8 {
+    pub fn current(&self) -> u8 {
         self.current
     }
 
@@ -44,10 +46,10 @@ impl Stack {
         self.occupied.is_empty()
     }
 
-    pub fn insert(&mut self, index: u8, entry: ArcEntry) {
+    pub fn insert(&mut self, index: u8, entry: E) {
         self.occupied.insert(index);
         let list = self.slot_mut(index);
-        list.push_back(entry);
+        list.push(entry);
     }
 
     fn skip(&mut self) {
@@ -58,22 +60,22 @@ impl Stack {
         }
     }
 
-    pub fn tick(&mut self, can_skip: bool) -> (List, u8) {
+    pub fn tick(&mut self, can_skip: bool) -> (E::Queue, bool) {
         self.current = self.current.wrapping_add(1);
         if can_skip {
             self.skip();
         }
         let slot = self.take();
-        (slot, self.current)
+        (slot, self.current == 0)
     }
 
-    pub fn take(&mut self) -> List {
+    pub fn take(&mut self) -> E::Queue {
         let current = self.current;
         self.occupied.remove(current);
         self.slot_mut(current).take()
     }
 
-    fn slot_mut(&mut self, index: u8) -> &mut List {
+    fn slot_mut(&mut self, index: u8) -> &mut E::Queue {
         unsafe { self.slots.get_unchecked_mut(index as usize) }
     }
 }

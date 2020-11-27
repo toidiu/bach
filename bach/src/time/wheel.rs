@@ -1,12 +1,21 @@
 use super::{
-    entry::{ArcEntry, List},
+    entry::{Entry, Queue},
     stack::Stack,
 };
 
-#[derive(Debug, Default)]
-pub struct Wheel {
-    stacks: [Stack; 8],
-    pending_wake: List,
+#[derive(Debug)]
+pub struct Wheel<E: Entry> {
+    stacks: [Stack<E>; 8],
+    pending_wake: E::Queue,
+}
+
+impl<E: Entry> Default for Wheel<E> {
+    fn default() -> Self {
+        Self {
+            stacks: Default::default(),
+            pending_wake: E::Queue::new(),
+        }
+    }
 }
 
 macro_rules! stack_map {
@@ -25,9 +34,9 @@ macro_rules! stack_map {
     }};
 }
 
-impl Wheel {
+impl<E: Entry> Wheel<E> {
     pub fn ticks(&self) -> u64 {
-        u64::from_le_bytes(stack_map!(self.stacks, |stack: &Stack| stack.current()))
+        u64::from_le_bytes(stack_map!(self.stacks, |stack: &Stack<E>| stack.current()))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -42,20 +51,20 @@ impl Wheel {
         is_empty!()
     }
 
-    pub fn insert(&mut self, entry: ArcEntry) {
+    pub fn insert(&mut self, mut entry: E) {
         let ticks = self.ticks();
         entry.set_start_tick(ticks);
         self.insert_at(entry, ticks);
     }
 
-    fn insert_at(&mut self, entry: ArcEntry, start_tick: u64) -> bool {
+    fn insert_at(&mut self, entry: E, start_tick: u64) -> bool {
         let delay = entry.delay();
         let absolute_time = delay.wrapping_add(start_tick);
         let now = self.ticks();
         let zero_time = (absolute_time ^ now).to_be();
 
         if zero_time == 0 {
-            self.pending_wake.push_back(entry);
+            self.pending_wake.push(entry);
             return true;
         }
 
@@ -82,7 +91,16 @@ impl Wheel {
             return None;
         }
 
-        while !self.advance_once()? {}
+        let mut iterations = 0;
+
+        while !self.advance_once()? {
+            if iterations == u16::MAX {
+                assert!(self.is_empty());
+                break;
+            }
+            //            debug_assert!(iterations < 1500, "advance iterated too many times");
+            iterations += 1;
+        }
 
         // TODO handle wheel wrapping
 
@@ -95,15 +113,9 @@ impl Wheel {
         let mut has_pending = false;
 
         for index in 0..self.stacks.len() {
-            let stack = self.stack_mut(index);
+            let (mut list, did_wrap) = self.stack_mut(index).tick(can_skip);
 
-            let (list, next) = stack.tick(can_skip);
-
-            // children can only skip if this is also empty
-            can_skip &= stack.is_empty();
-            is_empty &= can_skip;
-
-            for entry in list {
+            while let Some(entry) = list.pop() {
                 let start_tick = entry.start_tick();
                 if self.insert_at(entry, start_tick) {
                     // A pending item is ready
@@ -118,10 +130,14 @@ impl Wheel {
                 is_empty = false;
             }
 
-            // was can only proceed to the next stack if the current wrapped
-            if next != 0 {
+            // we can only proceed to the next stack if the current wrapped
+            if !did_wrap {
                 return Some(has_pending);
             }
+
+            // children can only skip if this is also empty
+            can_skip &= self.stack_mut(index).is_empty();
+            is_empty &= can_skip;
         }
 
         if is_empty {
@@ -131,21 +147,20 @@ impl Wheel {
         Some(has_pending)
     }
 
-    pub fn wake(&mut self) -> usize {
+    pub fn wake<F: Fn(E)>(&mut self, wake: F) -> usize {
         let mut count = 0;
 
-        for entry in self.pending_wake.take() {
+        let mut pending = self.pending_wake.take();
+
+        while let Some(entry) = pending.pop() {
             count += 1;
-            if entry.wake() {
-                // reinsert entries if they are periodic
-                self.insert(entry);
-            }
+            wake(entry);
         }
 
         count
     }
 
-    fn stack_mut(&mut self, index: usize) -> &mut Stack {
+    fn stack_mut(&mut self, index: usize) -> &mut Stack<E> {
         if cfg!(test) {
             debug_assert!(index < self.stacks.len());
         }
@@ -155,21 +170,21 @@ impl Wheel {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::entry::Entry, *};
+    use super::{super::entry::atomic, *};
     use alloc::{vec, vec::Vec};
     use bolero::{check, generator::*};
     use core::time::Duration;
 
     #[test]
     fn insert_advance_wake_check() {
-        let max_ticks = Duration::from_secs(3600).as_nanos() as u64;
+        let max_ticks = Duration::from_secs(1_000_000_000).as_nanos() as u64;
 
         let entry = gen::<Vec<u64>>().with().values(0..max_ticks);
         let entries = gen::<Vec<_>>().with().values(entry);
 
-        check!()
-            .with_generator(entries)
-            .for_each(|entries| test_helper(&entries[..]));
+        check!().with_generator(entries).for_each(|entries| {
+            test_helper(&entries[..]);
+        });
     }
 
     fn test_helper<T: AsRef<[u64]>>(entries: &[T]) {
@@ -186,12 +201,12 @@ mod tests {
             for entry in entries.iter().copied() {
                 // adding a 0-tick will immediately wake the entry
                 should_wake |= entry == 0;
-                wheel.insert(Entry::new(entry, false));
+                wheel.insert(atomic::Entry::new(entry));
             }
 
             let mut sorted = sorted.drain(..);
 
-            let woken = wheel.wake();
+            let woken = wheel.wake(atomic::wake);
 
             assert_eq!(woken > 0, should_wake);
 
@@ -212,7 +227,7 @@ mod tests {
                     "the wheel should not advance while there are pending items"
                 );
 
-                for _ in (0..wheel.wake()).skip(1) {
+                for _ in (0..wheel.wake(atomic::wake)).skip(1) {
                     assert_eq!(
                         sorted.next(),
                         Some(expected),
@@ -223,7 +238,7 @@ mod tests {
 
             assert!(wheel.is_empty());
             assert_eq!(wheel.advance(), None);
-            assert_eq!(wheel.wake(), 0);
+            assert_eq!(wheel.wake(atomic::wake), 0);
             assert!(wheel.is_empty());
 
             total_ticks += elapsed;
@@ -238,7 +253,7 @@ mod tests {
         assert_eq!(wheel.ticks(), 0);
         assert!(wheel.is_empty());
         assert_eq!(wheel.advance(), None);
-        assert_eq!(wheel.wake(), 0);
+        assert_eq!(wheel.wake(atomic::wake), 0);
     }
 
     #[test]

@@ -14,10 +14,10 @@ mod entry;
 mod stack;
 mod wheel;
 
-use entry::{ArcEntry, Entry};
+use entry::atomic::{self, ArcEntry};
 
 pub struct Scheduler {
-    wheel: wheel::Wheel,
+    wheel: wheel::Wheel<ArcEntry>,
     handle: Handle,
     queue: Receiver<ArcEntry>,
 }
@@ -74,7 +74,7 @@ impl Scheduler {
 
     /// Wakes all of the expired tasks
     pub fn wake(&mut self) -> usize {
-        self.wheel.wake()
+        self.wheel.wake(atomic::wake)
     }
 
     /// Move the queued entries into the wheel
@@ -101,11 +101,9 @@ impl Handle {
 
     /// Returns a future that sleeps for the given duration
     pub fn delay(&self, duration: Duration) -> Timer {
-        // Assuming a tick duratin of 1ns, this will truncate out at about 584
-        // years. Hopefully no one needs that :)
-        let ticks = (duration.as_nanos() / self.nanos_per_tick() as u128) as u64;
+        let ticks = self.duration_to_ticks(duration);
 
-        let entry = Entry::new(ticks, false);
+        let entry = atomic::Entry::new(ticks);
         let handle = self.clone();
         Timer { handle, entry }
     }
@@ -128,6 +126,12 @@ impl Handle {
         self.0.ticks.fetch_add(ticks, Ordering::SeqCst);
         ticks *= self.nanos_per_tick();
         Duration::from_nanos(ticks)
+    }
+
+    fn duration_to_ticks(&self, duration: Duration) -> u64 {
+        // Assuming a tick duratin of 1ns, this will truncate out at about 584
+        // years. Hopefully no one needs that :)
+        (duration.as_nanos() / self.nanos_per_tick() as u128) as u64
     }
 
     fn ticks(&self) -> u64 {
