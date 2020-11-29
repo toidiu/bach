@@ -10,9 +10,9 @@ use core::{
 use flume::{Receiver, Sender};
 
 mod bitset;
-mod entry;
+pub mod entry;
 mod stack;
-mod wheel;
+pub mod wheel;
 
 use entry::atomic::{self, ArcEntry};
 
