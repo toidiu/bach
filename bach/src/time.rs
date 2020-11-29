@@ -200,7 +200,7 @@ impl Future for Timer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executor;
+    use crate::{environment, executor};
     use alloc::{rc::Rc, vec::Vec};
     use bolero::{check, generator::*};
     use core::cell::Cell;
@@ -212,7 +212,7 @@ mod tests {
     #[derive(Default)]
     struct Env;
 
-    impl crate::executor::Environment for Env {
+    impl environment::Environment for Env {
         type Runner = Runner;
 
         fn with<F: Fn(Self::Runner)>(&mut self, _handle: &executor::Handle, f: F) -> Poll<()> {
@@ -230,7 +230,7 @@ mod tests {
     #[derive(Default)]
     struct Runner(Rc<Cell<bool>>);
 
-    impl crate::executor::Runner for Runner {
+    impl environment::Runner for Runner {
         fn run<F: FnOnce() -> bool + Send + 'static>(&mut self, run: F) {
             if run() {
                 self.0.set(true);

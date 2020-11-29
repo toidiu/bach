@@ -12,6 +12,7 @@ async-task = { version = "4", default-features = false }
 flume = "0.9"
 futures = { version = "0.3", default-features = false }
 intrusive-collections = "0.9"
+rayon = "1"
 
 [dev-dependencies]
 bolero = "0.6"

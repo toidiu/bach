@@ -1,3 +1,4 @@
+use crate::environment::{Environment, Runner};
 use async_task::{Runnable, Task};
 use core::{
     future::Future,
@@ -89,19 +90,10 @@ impl Handle {
     }
 }
 
-pub trait Environment {
-    type Runner: Runner;
-
-    fn with<F: Fn(Self::Runner)>(&mut self, handle: &Handle, f: F) -> Poll<()>;
-}
-
-pub trait Runner {
-    fn run<F: FnOnce() -> bool + Send + 'static>(&mut self, run: F);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment;
     use alloc::rc::Rc;
     use core::cell::Cell;
     use std::eprint;
@@ -113,7 +105,7 @@ mod tests {
     #[derive(Default)]
     struct Env;
 
-    impl super::Environment for Env {
+    impl environment::Environment for Env {
         type Runner = Runner;
 
         fn with<F: Fn(Self::Runner)>(&mut self, _handle: &Handle, f: F) -> Poll<()> {
@@ -131,7 +123,7 @@ mod tests {
     #[derive(Default)]
     struct Runner(Rc<Cell<bool>>);
 
-    impl super::Runner for Runner {
+    impl environment::Runner for Runner {
         fn run<F: FnOnce() -> bool + Send + 'static>(&mut self, run: F) {
             if run() {
                 self.0.set(true);
