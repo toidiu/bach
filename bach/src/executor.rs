@@ -62,6 +62,12 @@ impl<E: Environment> Executor<E> {
         })
     }
 
+    pub fn block(&mut self) {
+        while !self.queue.is_empty() {
+            while self.tick() == Poll::Pending {}
+        }
+    }
+
     pub fn environment(&mut self) -> &mut E {
         &mut self.environment
     }
@@ -100,18 +106,18 @@ pub trait Runner {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use alloc::rc::Rc;
     use core::cell::Cell;
     use std::eprint;
 
-    fn executor() -> Executor<Env> {
+    pub fn executor() -> Executor<Env> {
         Executor::new(Env::default(), None)
     }
 
     #[derive(Default)]
-    struct Env;
+    pub struct Env;
 
     impl super::Environment for Env {
         type Runner = Runner;
@@ -129,7 +135,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct Runner(Rc<Cell<bool>>);
+    pub struct Runner(Rc<Cell<bool>>);
 
     impl super::Runner for Runner {
         fn run<F: FnOnce() -> bool + Send + 'static>(&mut self, run: F) {

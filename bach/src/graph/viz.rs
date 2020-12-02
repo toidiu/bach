@@ -1,6 +1,6 @@
 use core::fmt;
 
-pub struct Dot<'a> {
+pub struct Viz<'a> {
     pub(crate) fmt: &'a mut dyn fmt::Write,
     pub(crate) subgraphs: usize,
     pub(crate) nodes: usize,
@@ -8,7 +8,7 @@ pub struct Dot<'a> {
     pub(crate) indent: usize,
 }
 
-impl<'a> Dot<'a> {
+impl<'a> Viz<'a> {
     pub(crate) fn new<W: fmt::Write>(fmt: &'a mut W) -> Self {
         Self {
             fmt,
