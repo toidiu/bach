@@ -552,6 +552,20 @@ pub mod channel {
                 self.channel.recv_async().await.ok()
             }
 
+            pub fn poll_receive(
+                &self,
+                cx: &mut core::task::Context,
+            ) -> core::task::Poll<Option<Message<M>>> {
+                use core::task::Poll;
+                let mut r = self.channel.recv_async();
+                let fut = Pin::new(&mut r);
+                match Future::poll(fut, cx) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(Ok(m)) => Poll::Ready(Some(m)),
+                    Poll::Ready(Err(_)) => Poll::Ready(None),
+                }
+            }
+
             pub fn try_receive(&self) -> Option<Message<M>> {
                 self.channel.try_recv().ok()
             }
