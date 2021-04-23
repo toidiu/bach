@@ -157,6 +157,7 @@ impl Handle {
 }
 
 /// A future that sleeps a task for a duration
+#[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Timer {
     handle: Handle,
     entry: ArcEntry,
@@ -205,41 +206,11 @@ impl Future for Timer {
 mod tests {
     use super::*;
     use crate::executor;
-    use alloc::{rc::Rc, vec::Vec};
+    use alloc::vec::Vec;
     use bolero::{check, generator::*};
-    use core::cell::Cell;
 
-    fn executor() -> executor::Executor<Env> {
-        executor::Executor::new(Env::default(), None)
-    }
-
-    #[derive(Default)]
-    struct Env;
-
-    impl crate::executor::Environment for Env {
-        type Runner = Runner;
-
-        fn with<F: Fn(Self::Runner)>(&mut self, _handle: &executor::Handle, f: F) -> Poll<()> {
-            let count = Rc::new(Cell::new(false));
-            let runner = Runner(count.clone());
-            f(runner);
-            if count.get() {
-                Poll::Pending
-            } else {
-                Poll::Ready(())
-            }
-        }
-    }
-
-    #[derive(Default)]
-    struct Runner(Rc<Cell<bool>>);
-
-    impl crate::executor::Runner for Runner {
-        fn run<F: FnOnce() -> bool + Send + 'static>(&mut self, run: F) {
-            if run() {
-                self.0.set(true);
-            }
-        }
+    fn executor() -> executor::Executor<executor::tests::Env> {
+        executor::tests::executor()
     }
 
     async fn delay(handle: Handle, count: usize, delay: Duration) {

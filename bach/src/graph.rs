@@ -439,6 +439,19 @@ pub mod channel {
                     })
                     .map_err(|err| err.0.body)
             }
+
+            pub fn broadcast(&self, body: M)
+            where
+                M: Clone,
+            {
+                for (destination, sender) in self.destinations.iter() {
+                    let _ = sender.send(Message {
+                        source: self.local_id,
+                        destination: NodeId(*destination),
+                        body: body.clone(),
+                    });
+                }
+            }
         }
 
         impl<M: 'static> Connection<receiver::Handle<M>> for Handle<M> {

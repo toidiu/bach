@@ -8,6 +8,22 @@ use flume::{Receiver, Sender};
 
 pub struct JoinHandle<Output>(Option<Task<Output>>);
 
+impl<Output> JoinHandle<Output> {
+    pub fn cancel(mut self) {
+        if let Some(task) = self.0.take() {
+            drop(task);
+        }
+    }
+
+    pub async fn stop(mut self) -> Option<Output> {
+        if let Some(task) = self.0.take() {
+            task.cancel().await
+        } else {
+            None
+        }
+    }
+}
+
 impl<O> Future for JoinHandle<O> {
     type Output = O;
 
@@ -31,17 +47,21 @@ pub struct Executor<Environment> {
 }
 
 impl<E: Environment> Executor<E> {
-    pub fn new(environment: E, queue_size: Option<usize>) -> Self {
+    pub fn new<F: FnOnce(&Handle) -> E>(create_env: F, queue_size: Option<usize>) -> Self {
         let (sender, queue) = if let Some(queue_size) = queue_size {
             flume::bounded(queue_size)
         } else {
             flume::unbounded()
         };
 
+        let handle = Handle(sender);
+
+        let environment = create_env(&handle);
+
         Self {
             environment,
             queue,
-            handle: Handle(sender),
+            handle,
         }
     }
 
@@ -54,17 +74,53 @@ impl<E: Environment> Executor<E> {
     }
 
     pub fn tick(&mut self) -> Poll<()> {
-        let queue = &self.queue;
-        self.environment.with(&self.handle, |mut runner| {
-            for runnable in queue.drain() {
-                runner.run(|| runnable.run());
+        let tasks = self.queue.drain().map(|runnable| {
+            move || {
+                if runnable.run() {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
             }
-        })
+        });
+        self.environment.run(tasks)
     }
 
-    pub fn block(&mut self) {
+    pub fn drain(&mut self) {
         while !self.queue.is_empty() {
-            while self.tick() == Poll::Pending {}
+            while self.tick() == Poll::Ready(()) {}
+        }
+    }
+
+    pub fn block_on<T, Output, F>(&mut self, task: T, mut wait: F) -> Output
+    where
+        T: 'static + Future<Output = Output> + Send,
+        Output: 'static + Send,
+        F: FnMut(&mut Self),
+    {
+        use core::task::{RawWaker, RawWakerVTable, Waker};
+
+        const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+        unsafe fn clone(ptr: *const ()) -> RawWaker {
+            RawWaker::new(ptr, &VTABLE)
+        }
+        unsafe fn noop(_ptr: *const ()) {
+            // noop
+        }
+
+        let mut task = self.spawn(task);
+        let waker = unsafe { Waker::from_raw(clone(core::ptr::null())) };
+        let mut ctx = Context::from_waker(&waker);
+
+        self.drain();
+
+        loop {
+            wait(self);
+            self.drain();
+
+            if let Poll::Ready(value) = Pin::new(&mut task).poll(&mut ctx) {
+                return value;
+            }
         }
     }
 
@@ -96,51 +152,38 @@ impl Handle {
 }
 
 pub trait Environment {
-    type Runner: Runner;
-
-    fn with<F: Fn(Self::Runner)>(&mut self, handle: &Handle, f: F) -> Poll<()>;
-}
-
-pub trait Runner {
-    fn run<F: FnOnce() -> bool + Send + 'static>(&mut self, run: F);
+    fn run<Tasks, F>(&mut self, tasks: Tasks) -> Poll<()>
+    where
+        Tasks: Iterator<Item = F> + Send,
+        F: 'static + FnOnce() -> Poll<()> + Send;
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use alloc::rc::Rc;
-    use core::cell::Cell;
     use std::eprint;
 
     pub fn executor() -> Executor<Env> {
-        Executor::new(Env::default(), None)
+        Executor::new(|_| Env::default(), None)
     }
 
     #[derive(Default)]
     pub struct Env;
 
     impl super::Environment for Env {
-        type Runner = Runner;
-
-        fn with<F: Fn(Self::Runner)>(&mut self, _handle: &Handle, f: F) -> Poll<()> {
-            let count = Rc::new(Cell::new(false));
-            let runner = Runner(count.clone());
-            f(runner);
-            if count.get() {
-                Poll::Pending
-            } else {
-                Poll::Ready(())
+        fn run<Tasks, F>(&mut self, tasks: Tasks) -> Poll<()>
+        where
+            Tasks: Iterator<Item = F>,
+            F: 'static + FnOnce() -> Poll<()> + Send,
+        {
+            let mut is_ready = false;
+            for task in tasks {
+                is_ready |= task().is_ready();
             }
-        }
-    }
-
-    #[derive(Default)]
-    pub struct Runner(Rc<Cell<bool>>);
-
-    impl super::Runner for Runner {
-        fn run<F: FnOnce() -> bool + Send + 'static>(&mut self, run: F) {
-            if run() {
-                self.0.set(true);
+            if is_ready {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
             }
         }
     }
@@ -184,6 +227,6 @@ pub(crate) mod tests {
             Yield::default().await;
         });
 
-        while executor.tick() == Poll::Pending {}
+        while executor.tick() == Poll::Ready(()) {}
     }
 }
