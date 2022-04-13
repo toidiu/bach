@@ -3,15 +3,12 @@ vulnerability = "deny"
 unmaintained = "deny"
 notice = "deny"
 yanked = "deny"
-ignore = [
-    "RUSTSEC-2020-0056",
-]
+ignore = []
 
 [bans]
 multiple-versions = "deny"
-skip = [
-    { name = "cfg-if" }, # only a macro so not a big deal
-    { name = "getrandom" }, # currently only a test dependency
+skip-tree = [
+    { name = "bolero" }, # bolero is always going to be just a test dependency
 ]
 
 [sources]
@@ -25,10 +22,6 @@ copyleft = "deny"
 confidence-threshold = 0.90
 allow = [
     "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
     "MIT",
-    "OpenSSL",
     "Zlib",
 ]

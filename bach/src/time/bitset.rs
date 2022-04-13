@@ -1,7 +1,5 @@
-use core::mem::size_of;
-
-type Slot = u64;
-const SLOT_BITS: usize = size_of::<Slot>() * 8;
+type Slot = usize;
+const SLOT_BITS: usize = Slot::BITS as _;
 const SLOT_BITS_U8: u8 = SLOT_BITS as u8;
 const SLOT_COUNT: usize = 256 / SLOT_BITS;
 

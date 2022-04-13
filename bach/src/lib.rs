@@ -1,6 +1,5 @@
 extern crate alloc;
 
-pub mod environment;
 pub mod executor;
 mod queue;
 pub mod rand;
