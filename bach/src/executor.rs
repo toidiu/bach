@@ -1,10 +1,12 @@
+use crate::queue::{create_queue, Receiver, Sender};
+use alloc::sync::Arc;
 use async_task::{Runnable, Task};
 use core::{
     future::Future,
     pin::Pin,
+    sync::atomic::{AtomicU64, Ordering},
     task::{Context, Poll},
 };
-use flume::{Receiver, Sender};
 
 pub struct JoinHandle<Output>(Option<Task<Output>>);
 
@@ -47,14 +49,13 @@ pub struct Executor<Environment> {
 }
 
 impl<E: Environment> Executor<E> {
-    pub fn new<F: FnOnce(&Handle) -> E>(create_env: F, queue_size: Option<usize>) -> Self {
-        let (sender, queue) = if let Some(queue_size) = queue_size {
-            flume::bounded(queue_size)
-        } else {
-            flume::unbounded()
-        };
+    pub fn new<F: FnOnce(&Handle) -> E>(create_env: F) -> Self {
+        let (sender, queue) = create_queue();
 
-        let handle = Handle(sender);
+        let handle = Handle {
+            sender,
+            primary_count: Default::default(),
+        };
 
         let environment = create_env(&handle);
 
@@ -73,30 +74,57 @@ impl<E: Environment> Executor<E> {
         self.handle.spawn(future)
     }
 
-    pub fn tick(&mut self) -> Poll<()> {
-        let tasks = self.queue.drain().map(|runnable| {
+    pub fn spawn_primary<F, Output>(&mut self, future: F) -> JoinHandle<Output>
+    where
+        F: Future<Output = Output> + Send + 'static,
+        Output: Send + 'static,
+    {
+        self.handle.spawn_primary(future)
+    }
+
+    pub fn handle(&self) -> &Handle {
+        &self.handle
+    }
+
+    pub fn microstep(&mut self) -> Poll<usize> {
+        let tasks = self.queue.drain();
+
+        let task_count = tasks.len();
+
+        if task_count == 0 {
+            return Poll::Ready(0);
+        }
+
+        let tasks = tasks.into_iter().map(|runnable| {
             move || {
                 if runnable.run() {
-                    Poll::Ready(())
-                } else {
                     Poll::Pending
+                } else {
+                    Poll::Ready(())
                 }
             }
         });
-        self.environment.run(tasks)
-    }
 
-    pub fn drain(&mut self) {
-        while !self.queue.is_empty() {
-            while self.tick() == Poll::Ready(()) {}
+        if self.environment.run(tasks).is_ready() {
+            Poll::Ready(task_count)
+        } else {
+            Poll::Pending
         }
     }
 
-    pub fn block_on<T, Output, F>(&mut self, task: T, mut wait: F) -> Output
+    pub fn macrostep(&mut self) -> usize {
+        loop {
+            if let Poll::Ready(count) = self.microstep() {
+                self.environment.on_macrostep(count);
+                return count;
+            }
+        }
+    }
+
+    pub fn block_on<T, Output>(&mut self, task: T) -> Output
     where
         T: 'static + Future<Output = Output> + Send,
         Output: 'static + Send,
-        F: FnMut(&mut Self),
     {
         use core::task::{RawWaker, RawWakerVTable, Waker};
 
@@ -112,14 +140,21 @@ impl<E: Environment> Executor<E> {
         let waker = unsafe { Waker::from_raw(clone(core::ptr::null())) };
         let mut ctx = Context::from_waker(&waker);
 
-        self.drain();
-
         loop {
-            wait(self);
-            self.drain();
+            self.macrostep();
 
             if let Poll::Ready(value) = Pin::new(&mut task).poll(&mut ctx) {
                 return value;
+            }
+        }
+    }
+
+    pub fn block_on_primary(&mut self) {
+        loop {
+            self.macrostep();
+
+            if self.handle.primary_count() == 0 {
+                return;
             }
         }
     }
@@ -130,7 +165,10 @@ impl<E: Environment> Executor<E> {
 }
 
 #[derive(Clone)]
-pub struct Handle(Sender<Runnable>);
+pub struct Handle {
+    sender: Sender<Runnable>,
+    primary_count: Arc<AtomicU64>,
+}
 
 impl Handle {
     pub fn spawn<F, Output>(&self, future: F) -> JoinHandle<Output>
@@ -138,16 +176,53 @@ impl Handle {
         F: Future<Output = Output> + Send + 'static,
         Output: Send + 'static,
     {
-        let sender = self.0.clone();
+        let sender = self.sender.clone();
 
         let (runnable, task) = async_task::spawn(future, move |runnable| {
-            sender.send(runnable).expect("pending task limit exhausted");
+            sender.send(runnable);
         });
 
         // queue the initial poll
         runnable.schedule();
 
         JoinHandle(Some(task))
+    }
+
+    pub fn spawn_primary<F, Output>(&self, future: F) -> JoinHandle<Output>
+    where
+        F: Future<Output = Output> + Send + 'static,
+        Output: Send + 'static,
+    {
+        let guard = PrimaryGuard::new(self.primary_count.clone());
+        self.spawn(async move {
+            let value = future.await;
+            // decrement the primary count after the future is finished
+            drop(guard);
+            value
+        })
+    }
+
+    pub fn enter<F: FnOnce() -> O, O>(&self, f: F) -> O {
+        crate::task::scope::with(self.clone(), f)
+    }
+
+    fn primary_count(&self) -> u64 {
+        self.primary_count.load(Ordering::SeqCst)
+    }
+}
+
+struct PrimaryGuard(Arc<AtomicU64>);
+
+impl PrimaryGuard {
+    fn new(count: Arc<AtomicU64>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
+    }
+}
+
+impl Drop for PrimaryGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -156,15 +231,18 @@ pub trait Environment {
     where
         Tasks: Iterator<Item = F> + Send,
         F: 'static + FnOnce() -> Poll<()> + Send;
+
+    fn on_macrostep(&mut self, count: usize) {
+        let _ = count;
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::eprint;
 
     pub fn executor() -> Executor<Env> {
-        Executor::new(|_| Env::default(), None)
+        Executor::new(|_| Env::default())
     }
 
     #[derive(Default)]
@@ -176,9 +254,9 @@ pub(crate) mod tests {
             Tasks: Iterator<Item = F>,
             F: 'static + FnOnce() -> Poll<()> + Send,
         {
-            let mut is_ready = false;
+            let mut is_ready = true;
             for task in tasks {
-                is_ready |= task().is_ready();
+                is_ready &= task().is_ready();
             }
             if is_ready {
                 Poll::Ready(())
@@ -208,25 +286,42 @@ pub(crate) mod tests {
     fn basic_test() {
         let mut executor = executor();
 
-        executor.spawn(async {
-            Yield::default().await;
-            eprint!("hello");
-            Yield::default().await;
+        let (sender, mut receiver) = create_queue();
+
+        crate::task::scope::with(executor.handle().clone(), || {
+            use crate::task::spawn;
+
+            let s1 = sender.clone();
+            spawn(async move {
+                Yield::default().await;
+                s1.send("hello");
+                Yield::default().await;
+            });
+
+            let s2 = sender.clone();
+            let exclaimation = async move {
+                Yield::default().await;
+                s2.send("!!!!!");
+                Yield::default().await;
+            };
+
+            let s3 = sender.clone();
+            spawn(async move {
+                Yield::default().await;
+                s3.send("world");
+                Yield::default().await;
+                exclaimation.await;
+                Yield::default().await;
+            });
         });
 
-        let exclaimation = async {
-            Yield::default().await;
-            eprint!("!!!!!");
-            Yield::default().await;
-        };
-        executor.spawn(async {
-            Yield::default().await;
-            eprint!("world");
-            Yield::default().await;
-            exclaimation.await;
-            Yield::default().await;
-        });
+        executor.macrostep();
 
-        while executor.tick() == Poll::Ready(()) {}
+        let mut output = String::new();
+        for chunk in receiver.drain() {
+            output.push_str(chunk);
+        }
+
+        assert_eq!(output, "helloworld!!!!!");
     }
 }

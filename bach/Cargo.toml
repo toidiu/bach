@@ -7,14 +7,12 @@ license = "MIT"
 edition = "2018"
 
 [dependencies]
-anymap = "0.12"
 arr_macro = "0.1"
 async-task = { version = "4", default-features = false }
-flume = "0.9"
 futures = { version = "0.3", default-features = false }
-idmap = "0.2"
 intrusive-collections = "0.9"
-petgraph = "0.5"
+parking_lot = "0.12"
+rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 
 [dev-dependencies]
 bolero = "0.6"

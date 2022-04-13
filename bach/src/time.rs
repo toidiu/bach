@@ -1,3 +1,4 @@
+use crate::queue::{create_queue, Receiver, Sender};
 use alloc::sync::Arc;
 use core::{
     fmt,
@@ -7,12 +8,17 @@ use core::{
     task::{Context, Poll},
     time::Duration,
 };
-use flume::{Receiver, Sender};
 
 mod bitset;
 pub mod entry;
 mod stack;
 pub mod wheel;
+
+crate::scope::define!(scope, Handle);
+
+pub fn delay(duration: Duration) -> Timer {
+    scope::borrow_with(|handle| handle.delay(duration))
+}
 
 use entry::atomic::{self, ArcEntry};
 
@@ -27,25 +33,20 @@ impl fmt::Debug for Scheduler {
         f.debug_struct("Scheduler")
             .field("now", &self.handle.now())
             .field("wheel", &self.wheel)
-            .field("queue", &self.queue.len())
             .finish()
     }
 }
 
 impl Default for Scheduler {
     fn default() -> Self {
-        Self::new(Some(1024), Duration::from_millis(1))
+        Self::new(Duration::from_millis(1))
     }
 }
 
 impl Scheduler {
     /// Creates a new Scheduler
-    pub fn new(capacity: Option<usize>, tick_duration: Duration) -> Self {
-        let (sender, queue) = if let Some(capacity) = capacity {
-            flume::bounded(capacity)
-        } else {
-            flume::unbounded()
-        };
+    pub fn new(tick_duration: Duration) -> Self {
+        let (sender, queue) = create_queue();
         let handle = Handle::new(sender, tick_duration);
 
         Self {
@@ -58,6 +59,10 @@ impl Scheduler {
     /// Returns a handle that can be easily cloned
     pub fn handle(&self) -> Handle {
         self.handle.clone()
+    }
+
+    pub fn enter<F: FnOnce() -> O, O>(&self, f: F) -> O {
+        scope::with(self.handle(), f)
     }
 
     /// Returns the amount of time until the next task
@@ -79,7 +84,7 @@ impl Scheduler {
 
     /// Move the queued entries into the wheel
     fn update(&mut self) {
-        for entry in self.queue.try_iter() {
+        for entry in self.queue.drain() {
             self.wheel.insert(entry);
         }
     }
@@ -89,11 +94,11 @@ impl Scheduler {
 pub struct Handle(Arc<InnerHandle>);
 
 impl Handle {
-    fn new(sender: Sender<ArcEntry>, tick_duration: Duration) -> Self {
+    fn new(queue: Sender<ArcEntry>, tick_duration: Duration) -> Self {
         let nanos_per_tick = tick_duration.max(Duration::from_nanos(1)).as_nanos() as u64;
         let inner = InnerHandle {
             ticks: AtomicU64::new(0),
-            sender,
+            queue,
             nanos_per_tick: AtomicU64::new(nanos_per_tick),
         };
         Self(Arc::new(inner))
@@ -129,7 +134,7 @@ impl Handle {
     }
 
     fn duration_to_ticks(&self, duration: Duration) -> u64 {
-        // Assuming a tick duratin of 1ns, this will truncate out at about 584
+        // Assuming a tick duration of 1ns, this will truncate out at about 584
         // years. Hopefully no one needs that :)
         (duration.as_nanos() / self.nanos_per_tick() as u128) as u64
     }
@@ -146,13 +151,13 @@ impl Handle {
 #[derive(Debug)]
 struct InnerHandle {
     ticks: AtomicU64,
-    sender: Sender<ArcEntry>,
+    queue: Sender<ArcEntry>,
     nanos_per_tick: AtomicU64,
 }
 
 impl Handle {
     fn register(&self, entry: &ArcEntry) {
-        self.0.sender.send(entry.clone()).expect("send queue full")
+        self.0.queue.send(entry.clone());
     }
 }
 
@@ -237,7 +242,7 @@ mod tests {
     }
 
     fn test_helper(delays: &[(u8, Duration)], min_time: Duration) {
-        let mut scheduler = Scheduler::new(None, min_time);
+        let mut scheduler = Scheduler::new(min_time);
         let mut executor = executor();
 
         let handle = scheduler.handle();
@@ -249,7 +254,7 @@ mod tests {
         let mut total = Duration::from_secs(0);
 
         loop {
-            while executor.tick() == Poll::Pending {}
+            executor.macrostep();
 
             if let Some(expiration) = scheduler.advance() {
                 total += expiration;
@@ -260,7 +265,10 @@ mod tests {
             }
         }
 
-        assert!(executor.tick().is_ready(), "the task list should be empty");
+        assert!(
+            executor.microstep().is_ready(),
+            "the task list should be empty"
+        );
         assert!(
             scheduler.advance().is_none(),
             "the scheduler should be empty"

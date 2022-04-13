@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn insert_advance_wake_check() {
-        let max_ticks = Duration::from_secs(1_000_000_000).as_nanos() as u64;
+        let max_ticks = Duration::from_secs(100_000).as_nanos() as u64;
 
         let entry = gen::<Vec<u64>>().with().values(0..max_ticks);
         let entries = gen::<Vec<_>>().with().values(entry);
