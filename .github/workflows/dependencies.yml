@@ -34,12 +34,9 @@ jobs:
           profile: minimal
           override: true
 
-      - uses: actions-rs/install@v0.1
+      - uses: camshaft/install@v1
         with:
           crate: cargo-audit
-          # this job hangs when using cache
-          # use-tool-cache: true
-          version: latest
 
       - uses: actions-rs/audit-check@v1
         with:
@@ -50,12 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - uses: actions-rs/toolchain@v1
-        id: toolchain
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
+      - name: "Remove rust-toolchain"
+        run: rm rust-toolchain
 
       - uses: EmbarkStudios/cargo-deny-action@v1
         with:

@@ -13,12 +13,9 @@ env:
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
   RUST_BACKTRACE: 1
-  SCCACHE_CACHE_SIZE: 300M
-  SCCACHE_DIR: ${{ github.workspace }}/.sccache
-  SCCACHE_IDLE_TIMEOUT: 0
   # Pin the nightly toolchain to prevent breakage.
   # This should be occasionally updated.
-  RUST_NIGHTLY_TOOLCHAIN: nightly-2020-11-09
+  RUST_NIGHTLY_TOOLCHAIN: nightly-2022-04-12
 
 jobs:
   env:
@@ -58,77 +55,56 @@ jobs:
 
   clippy:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
     steps:
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: actions-rs/toolchain@v1.0.7
         id: toolchain
         with:
-          toolchain: stable
+          toolchain: ${{ matrix.toolchain }}
           profile: minimal
           override: true
           components: clippy
 
-      - uses: actions/checkout@v2
+      - uses: camshaft/rust-cache@v1
 
-      - name: Install sccache
-        uses: actions-rs/install@v0.1
-        with:
-          crate: sccache
-          use-tool-cache: true
-          version: latest
-
-      - name: Generate Cargo.lock
-        run: cargo update
-
-      - name: Cache cargo registry
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ~/.cargo/registry/cache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-cargo-registry-
-
-      - name: Cache sccache output
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-sccache-${{ hashFiles('**/Cargo.*') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-sccache-
-
-      - name: Start sccache
-        run: sccache --start-server
-
+      # TODO translate json reports to in-action warnings
       - name: Run cargo clippy
-        uses: actions-rs/clippy-check@v1
+        uses: actions-rs/cargo@v1.0.3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          command: clippy
           args: --all-features --all-targets -- -D warnings
-        env:
-          RUSTC_WRAPPER: sccache
-
-      - name: Stop sccache
-        run: sccache --stop-server
 
   udeps:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: actions-rs/toolchain@v1.0.7
         id: toolchain
         with:
           toolchain: ${{ env.RUST_NIGHTLY_TOOLCHAIN }}
           profile: minimal
           override: true
 
-      - uses: actions-rs/install@v0.1
+      - uses: camshaft/rust-cache@v1
+
+      - uses: camshaft/install@v1
         with:
           crate: cargo-udeps
-          use-tool-cache: true
-          version: latest
-
-      - uses: actions/checkout@v2
 
       - name: Run cargo udeps
         run: cargo udeps --workspace --all-targets
+        env:
+          RUSTC_WRAPPER: ""
 
   test:
     runs-on: ${{ matrix.os }}
@@ -148,44 +124,14 @@ jobs:
         with:
           lfs: true
 
-      - name: Install sccache
-        uses: actions-rs/install@v0.1
+      - uses: camshaft/rust-cache@v1
         with:
-          crate: sccache
-          use-tool-cache: true
-          version: latest
-
-      - name: Generate Cargo.lock
-        run: cargo update
-
-      - name: Cache cargo registry
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ~/.cargo/registry/cache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-cargo-registry-
-
-      - name: Cache sccache output
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-sccache-${{ hashFiles('**/Cargo.*') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-sccache-
-
-      - name: Start sccache
-        run: sccache --start-server
+          key: ${{ matrix.target }}
 
       - name: Run cargo test
         uses: actions-rs/cargo@v1
         with:
           command: test
-        env:
-          RUSTC_WRAPPER: sccache
-
-      - name: Stop sccache
-        run: sccache --stop-server
 
   miri:
     runs-on: ubuntu-latest
@@ -193,50 +139,24 @@ jobs:
       matrix:
         crate: [bach]
     steps:
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: actions-rs/toolchain@v1.0.7
         id: toolchain
         with:
           toolchain: ${{ env.RUST_NIGHTLY_TOOLCHAIN }}
           override: true
-          components: miri
+          components: miri, rust-src
 
-      - uses: actions/checkout@v2
-
-      - name: Install sccache
-        uses: actions-rs/install@v0.1
+      - uses: camshaft/rust-cache@v1
         with:
-          crate: sccache
-          use-tool-cache: true
-          version: latest
-
-      - name: Generate Cargo.lock
-        run: cargo update
-
-      - name: Cache cargo registry
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ~/.cargo/registry/cache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-${{ matrix.crate }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-${{ matrix.crate }}-cargo-registry-
-
-      - name: Cache sccache output
-        uses: actions/cache@v2
-        continue-on-error: true
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-${{ matrix.crate }}-sccache-${{ hashFiles('**/Cargo.*') }}
-          restore-keys: ${{ runner.os }}-${{ steps.toolchain.outputs.rustc_hash }}-${{ github.job }}-${{ matrix.crate }}-sccache-
-
-      - name: Start sccache
-        run: sccache --start-server
+          key: ${{ matrix.crate }}
 
       - name: ${{ matrix.crate }}
-        run: cd ${{ matrix.crate }} && cargo miri test
+        # Disabling capture speeds up miri execution: https://github.com/rust-lang/miri/issues/1780#issuecomment-830664528
+        run: cd ${{ matrix.crate }} && cargo miri test -- --nocapture
         env:
-          RUSTC_WRAPPER: sccache
           # needed to read corpus files from filesystem
           MIRIFLAGS: -Zmiri-disable-isolation
-
-      - name: Stop sccache
-        run: sccache --stop-server
