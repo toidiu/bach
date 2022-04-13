@@ -254,7 +254,10 @@ mod tests {
 
     #[test]
     fn crossing_test() {
-        for t in [250..260, 510..520, 65790..65800].iter().cloned().flatten() {
+        for t in [250..260, 510..520, 65790..65800]
+            .iter()
+            .flat_map(|v| v.clone())
+        {
             test_helper(&[[t, t + 1]]);
         }
     }
