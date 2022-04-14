@@ -1,5 +1,11 @@
 use alloc::sync::Arc;
+use core::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
 use parking_lot::Mutex;
+use pin_project::pin_project;
 use rand::{distributions, prelude::*};
 
 crate::scope::define!(scope, Scope);
@@ -75,5 +81,28 @@ impl RngCore for Scope {
 
     fn try_fill_bytes(&mut self, bytes: &mut [u8]) -> Result<(), rand::Error> {
         self.rng.lock().try_fill_bytes(bytes)
+    }
+}
+
+#[pin_project]
+pub struct Task<F> {
+    #[pin]
+    inner: F,
+    scope: Scope,
+}
+
+impl<F> Task<F> {
+    pub fn new(inner: F, scope: Scope) -> Self {
+        Self { inner, scope }
+    }
+}
+
+impl<F: Future> Future for Task<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = self.project();
+        let inner = this.inner;
+        this.scope.enter(move || Future::poll(inner, cx))
     }
 }

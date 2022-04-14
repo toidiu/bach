@@ -1,309 +1,40 @@
-use crate::queue::{create_queue, Receiver, Sender};
-use alloc::sync::Arc;
-use core::{
-    fmt,
-    future::Future,
-    pin::Pin,
-    sync::atomic::{AtomicU64, Ordering},
-    task::{Context, Poll},
-    time::Duration,
-};
+use core::time::Duration;
 
 mod bitset;
-pub mod entry;
+mod entry;
+pub mod scheduler;
 mod stack;
-pub mod wheel;
+mod wheel;
 
-crate::scope::define!(scope, Handle);
+pub fn delay(duration: Duration) -> scheduler::Timer {
+    scheduler::scope::borrow_with(|handle| {
+        let nanos = duration.as_nanos();
+        let nanos_per_tick = resolution::tick_duration().as_nanos();
+        let ticks = nanos / nanos_per_tick;
 
-pub fn delay(duration: Duration) -> Timer {
-    scope::borrow_with(|handle| handle.delay(duration))
+        handle.delay(ticks as u64)
+    })
 }
 
-use entry::atomic::{self, ArcEntry};
+pub fn now() -> Duration {
+    scheduler::scope::borrow_with(|handle| {
+        let nanos_per_tick = resolution::tick_duration().as_nanos() as u64;
 
-pub struct Scheduler {
-    wheel: wheel::Wheel<ArcEntry>,
-    handle: Handle,
-    queue: Receiver<ArcEntry>,
+        let ticks = handle.ticks();
+        let nanos = nanos_per_tick * ticks;
+        Duration::from_nanos(nanos)
+    })
 }
 
-impl fmt::Debug for Scheduler {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Scheduler")
-            .field("now", &self.handle.now())
-            .field("wheel", &self.wheel)
-            .finish()
-    }
-}
+pub use resolution::{tick_duration, with_tick_duration};
 
-impl Default for Scheduler {
-    fn default() -> Self {
-        Self::new(Duration::from_millis(1))
-    }
-}
+mod resolution {
+    use core::time::Duration;
+    crate::scope::define!(scope, Duration);
 
-impl Scheduler {
-    /// Creates a new Scheduler
-    pub fn new(tick_duration: Duration) -> Self {
-        let (sender, queue) = create_queue();
-        let handle = Handle::new(sender, tick_duration);
-
-        Self {
-            wheel: Default::default(),
-            handle,
-            queue,
-        }
+    pub fn tick_duration() -> Duration {
+        scope::try_borrow_with(|v| v.unwrap_or_else(|| Duration::from_micros(1)))
     }
 
-    /// Returns a handle that can be easily cloned
-    pub fn handle(&self) -> Handle {
-        self.handle.clone()
-    }
-
-    pub fn enter<F: FnOnce() -> O, O>(&self, f: F) -> O {
-        scope::with(self.handle(), f)
-    }
-
-    /// Returns the amount of time until the next task
-    ///
-    /// An implementation may sleep for the duration.
-    pub fn advance(&mut self) -> Option<Duration> {
-        self.update();
-
-        let ticks = self.wheel.advance()?;
-        let time = self.handle.advance(ticks);
-
-        Some(time)
-    }
-
-    /// Wakes all of the expired tasks
-    pub fn wake(&mut self) -> usize {
-        self.wheel.wake(atomic::wake)
-    }
-
-    /// Move the queued entries into the wheel
-    fn update(&mut self) {
-        for entry in self.queue.drain() {
-            self.wheel.insert(entry);
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Handle(Arc<InnerHandle>);
-
-impl Handle {
-    fn new(queue: Sender<ArcEntry>, tick_duration: Duration) -> Self {
-        let nanos_per_tick = tick_duration.max(Duration::from_nanos(1)).as_nanos() as u64;
-        let inner = InnerHandle {
-            ticks: AtomicU64::new(0),
-            queue,
-            nanos_per_tick: AtomicU64::new(nanos_per_tick),
-        };
-        Self(Arc::new(inner))
-    }
-
-    /// Returns a future that sleeps for the given duration
-    pub fn delay(&self, duration: Duration) -> Timer {
-        let ticks = self.duration_to_ticks(duration);
-
-        let entry = atomic::Entry::new(ticks);
-        let handle = self.clone();
-        Timer { handle, entry }
-    }
-
-    /// Returns the current amount of time that has passed for this scheduler
-    pub fn now(&self) -> Duration {
-        let mut ticks = self.ticks();
-        ticks *= self.nanos_per_tick();
-        Duration::from_nanos(ticks)
-    }
-
-    fn advance(&self, mut ticks: u64) -> Duration {
-        if cfg!(test) {
-            self.0
-                .ticks
-                .load(Ordering::SeqCst)
-                .checked_add(ticks)
-                .expect("tick overflow");
-        }
-        self.0.ticks.fetch_add(ticks, Ordering::SeqCst);
-        ticks *= self.nanos_per_tick();
-        Duration::from_nanos(ticks)
-    }
-
-    fn duration_to_ticks(&self, duration: Duration) -> u64 {
-        // Assuming a tick duration of 1ns, this will truncate out at about 584
-        // years. Hopefully no one needs that :)
-        (duration.as_nanos() / self.nanos_per_tick() as u128) as u64
-    }
-
-    fn ticks(&self) -> u64 {
-        self.0.ticks.load(Ordering::SeqCst)
-    }
-
-    fn nanos_per_tick(&self) -> u64 {
-        self.0.nanos_per_tick.load(Ordering::SeqCst)
-    }
-}
-
-#[derive(Debug)]
-struct InnerHandle {
-    ticks: AtomicU64,
-    queue: Sender<ArcEntry>,
-    nanos_per_tick: AtomicU64,
-}
-
-impl Handle {
-    fn register(&self, entry: &ArcEntry) {
-        self.0.queue.send(entry.clone());
-    }
-}
-
-/// A future that sleeps a task for a duration
-#[must_use = "futures do nothing unless you `.await` or poll them"]
-pub struct Timer {
-    handle: Handle,
-    entry: ArcEntry,
-}
-
-impl Timer {
-    /// Cancels the timer
-    pub fn cancel(&mut self) {
-        self.entry.cancel();
-    }
-}
-
-impl Drop for Timer {
-    fn drop(&mut self) {
-        self.cancel();
-    }
-}
-
-impl Future for Timer {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<()> {
-        // check condition before to avoid needless registration
-        if self.entry.take_expired() {
-            return Poll::Ready(());
-        }
-
-        // register the waker with the entry
-        self.entry.register(cx.waker());
-
-        // check condition after registration to avoid loss of notification
-        if self.entry.take_expired() {
-            return Poll::Ready(());
-        }
-
-        // register the timer with the handle
-        if self.entry.should_register() {
-            self.handle.register(&self.entry);
-        }
-
-        Poll::Pending
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::executor;
-    use alloc::vec::Vec;
-    use bolero::{check, generator::*};
-
-    fn executor() -> executor::Executor<executor::tests::Env> {
-        executor::tests::executor()
-    }
-
-    async fn delay(handle: Handle, count: usize, delay: Duration) {
-        let nanos_per_tick = handle.nanos_per_tick() as u128;
-        for _ in 0..count {
-            // get the time before the delay
-            let now = handle.now();
-
-            // await the delay
-            handle.delay(delay).await;
-
-            // get the time that has passed on the clock and make sure it matches the amount that
-            // was delayed
-            let actual = handle.now();
-            let expected = now + delay;
-            assert_eq!(
-                actual.as_nanos() / nanos_per_tick,
-                expected.as_nanos() / nanos_per_tick,
-                "actual: {:?}, expected: {:?}",
-                actual,
-                expected
-            );
-        }
-    }
-
-    fn test_helper(delays: &[(u8, Duration)], min_time: Duration) {
-        let mut scheduler = Scheduler::new(min_time);
-        let mut executor = executor();
-
-        let handle = scheduler.handle();
-
-        for (count, duration) in delays.as_ref().iter() {
-            executor.spawn(delay(handle.clone(), *count as usize, *duration));
-        }
-
-        let mut total = Duration::from_secs(0);
-
-        loop {
-            executor.macrostep();
-
-            if let Some(expiration) = scheduler.advance() {
-                total += expiration;
-                scheduler.wake();
-            } else if scheduler.wake() == 0 {
-                // there are no remaining tasks to execute
-                break;
-            }
-        }
-
-        assert!(
-            executor.microstep().is_ready(),
-            "the task list should be empty"
-        );
-        assert!(
-            scheduler.advance().is_none(),
-            "the scheduler should be empty"
-        );
-        assert_eq!(
-            total,
-            handle.now(),
-            "the current time should reflect the total number of sleep durations"
-        );
-
-        drop(scheduler);
-        drop(executor);
-
-        assert_eq!(
-            Arc::strong_count(&handle.0),
-            1,
-            "the scheduler should cleanly shut down"
-        );
-    }
-
-    #[test]
-    fn timer_test() {
-        let min_time = Duration::from_nanos(1).as_nanos() as u64;
-        let max_time = Duration::from_secs(3600).as_nanos() as u64;
-
-        let delay = (min_time..max_time).map_gen(Duration::from_nanos);
-        let count = 0u8..3;
-        let delays = gen::<Vec<_>>().with().values((count, delay));
-
-        let min_duration = (Duration::from_nanos(1).as_nanos()
-            ..Duration::from_millis(10).as_nanos())
-            .map_gen(|v| Duration::from_nanos(v as _));
-
-        check!()
-            .with_generator((delays, min_duration))
-            .for_each(|(delays, min_duration)| test_helper(delays, *min_duration));
-    }
+    pub use scope::with as with_tick_duration;
 }
