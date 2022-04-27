@@ -143,6 +143,7 @@ impl<E: Entry> Wheel<E> {
         Some(has_pending)
     }
 
+    #[inline]
     pub fn wake<F: FnMut(E)>(&mut self, mut wake: F) -> usize {
         let mut count = 0;
 
@@ -156,6 +157,29 @@ impl<E: Entry> Wheel<E> {
         count
     }
 
+    #[inline]
+    pub fn close<F: FnMut(E)>(&mut self, mut close: F) {
+        if self.is_empty() {
+            return;
+        }
+
+        while let Some(entry) = self.pending_wake.pop() {
+            close(entry);
+        }
+
+        for stack in self.stacks.iter_mut() {
+            stack.close(&mut close);
+        }
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        for stack in self.stacks.iter_mut() {
+            stack.reset();
+        }
+    }
+
+    #[inline]
     fn stack_mut(&mut self, index: usize) -> &mut Stack<E> {
         if cfg!(test) {
             debug_assert!(index < self.stacks.len());

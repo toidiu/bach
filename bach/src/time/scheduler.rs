@@ -80,6 +80,19 @@ impl Scheduler {
             self.wheel.insert(entry);
         }
     }
+
+    pub fn close(&mut self) {
+        scope::with(self.handle(), || {
+            self.wheel.close(|entry| {
+                // notify everything that we're shutting down
+                entry.wake();
+            })
+        });
+    }
+
+    pub fn reset(&mut self) {
+        self.wheel.reset();
+    }
 }
 
 #[derive(Debug, Clone)]

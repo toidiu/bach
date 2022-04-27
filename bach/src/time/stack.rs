@@ -75,6 +75,34 @@ impl<E: Entry> Stack<E> {
         self.slot_mut(current).take()
     }
 
+    #[inline]
+    pub fn close<F: FnMut(E)>(&mut self, mut close: F) {
+        if self.occupied.is_empty() {
+            return;
+        }
+
+        let mut idx = 0;
+        loop {
+            let queue = self.slot_mut(idx);
+            while let Some(entry) = queue.pop() {
+                close(entry);
+            }
+
+            self.occupied.remove(idx);
+
+            if let Some(next_idx) = self.occupied.next_occupied(idx) {
+                idx = next_idx;
+            } else {
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.current = 0;
+    }
+
     fn slot_mut(&mut self, index: u8) -> &mut E::Queue {
         unsafe { self.slots.get_unchecked_mut(index as usize) }
     }

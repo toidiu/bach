@@ -5,7 +5,7 @@ use core::{
     future::Future,
     pin::Pin,
     sync::atomic::{AtomicU64, Ordering},
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
 pub struct JoinHandle<Output>(Option<Task<Output>>);
@@ -42,8 +42,8 @@ impl<T> Drop for JoinHandle<T> {
     }
 }
 
-pub struct Executor<Environment> {
-    environment: Environment,
+pub struct Executor<E: Environment> {
+    environment: E,
     queue: Receiver<Runnable>,
     handle: Handle,
 }
@@ -126,7 +126,7 @@ impl<E: Environment> Executor<E> {
         T: 'static + Future<Output = Output> + Send,
         Output: 'static + Send,
     {
-        use core::task::{RawWaker, RawWakerVTable, Waker};
+        use core::task::{RawWaker, RawWakerVTable};
 
         const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
         unsafe fn clone(ptr: *const ()) -> RawWaker {
@@ -161,6 +161,20 @@ impl<E: Environment> Executor<E> {
 
     pub fn environment(&mut self) -> &mut E {
         &mut self.environment
+    }
+
+    pub fn close(&mut self) {
+        let queue = self.queue.close();
+        self.environment.close(move || {
+            // drop the pending items in the queue first
+            drop(queue);
+        });
+    }
+}
+
+impl<E: Environment> Drop for Executor<E> {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -234,6 +248,19 @@ pub trait Environment {
 
     fn on_macrostep(&mut self, count: usize) {
         let _ = count;
+    }
+
+    fn close<F>(&mut self, close: F)
+    where
+        F: 'static + FnOnce() + Send,
+    {
+        let _ = self.run(
+            Some(move || {
+                close();
+                Poll::Ready(())
+            })
+            .into_iter(),
+        );
     }
 }
 
