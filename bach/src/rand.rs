@@ -7,6 +7,7 @@ use core::{
 use parking_lot::Mutex;
 use pin_project::pin_project;
 use rand::{distributions, prelude::*};
+use rand_xoshiro::Xoshiro256PlusPlus;
 
 crate::scope::define!(scope, Scope);
 
@@ -62,12 +63,12 @@ pub fn one_of<T>(items: &[T]) -> &T {
 
 #[derive(Clone)]
 pub struct Scope {
-    rng: Arc<Mutex<SmallRng>>,
+    rng: Arc<Mutex<Xoshiro256PlusPlus>>,
 }
 
 impl Scope {
     pub fn new(seed: u64) -> Self {
-        let rng = SmallRng::seed_from_u64(seed);
+        let rng = Xoshiro256PlusPlus::seed_from_u64(seed);
         let rng = Arc::new(Mutex::new(rng));
         Self { rng }
     }

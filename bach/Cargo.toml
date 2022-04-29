@@ -13,7 +13,8 @@ futures = { version = "0.3", default-features = false }
 intrusive-collections = "0.9"
 parking_lot = "0.12"
 pin-project = "1"
-rand = { version = "0.8", default-features = false, features = ["small_rng"] }
+rand = { version = "0.8", default-features = false }
+rand_xoshiro = "0.6"
 
 [dev-dependencies]
 bolero = "0.6"
