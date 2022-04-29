@@ -10,6 +10,17 @@ use rand::{distributions, prelude::*};
 
 crate::scope::define!(scope, Scope);
 
+pub fn fill_bytes(bytes: &mut [u8]) {
+    scope::borrow_mut_with(|scope| scope.fill_bytes(bytes))
+}
+
+pub fn fill<T>(values: &mut [T])
+where
+    [T]: rand::Fill,
+{
+    scope::borrow_mut_with(|scope| scope.fill(values))
+}
+
 pub fn gen<T>() -> T
 where
     distributions::Standard: Distribution<T>,
