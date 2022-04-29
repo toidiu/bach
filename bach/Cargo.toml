@@ -1,6 +1,6 @@
 [package]
 name = "bach"
-version = "0.0.4"
+version = "0.0.5"
 authors = ["Cameron Bytheway <bytheway.cameron@gmail.com>"]
 description = "Discrete-event simulation environment for async workflows"
 license = "MIT"
