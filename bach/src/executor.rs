@@ -207,7 +207,7 @@ impl Handle {
         F: Future<Output = Output> + Send + 'static,
         Output: Send + 'static,
     {
-        let guard = PrimaryGuard::new(self.primary_count.clone());
+        let guard = self.primary_guard();
         self.spawn(async move {
             let value = future.await;
             // decrement the primary count after the future is finished
@@ -220,23 +220,12 @@ impl Handle {
         crate::task::scope::with(self.clone(), f)
     }
 
+    pub fn primary_guard(&self) -> crate::task::primary::Guard {
+        crate::task::primary::Guard::new(self.primary_count.clone())
+    }
+
     fn primary_count(&self) -> u64 {
         self.primary_count.load(Ordering::SeqCst)
-    }
-}
-
-struct PrimaryGuard(Arc<AtomicU64>);
-
-impl PrimaryGuard {
-    fn new(count: Arc<AtomicU64>) -> Self {
-        count.fetch_add(1, Ordering::SeqCst);
-        Self(count)
-    }
-}
-
-impl Drop for PrimaryGuard {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
